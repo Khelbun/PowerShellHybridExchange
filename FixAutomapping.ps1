@@ -1,7 +1,19 @@
-# Created November 21, 2016 by Eric Sobkowicz
-# 
-# This script will ask the user for a username and a file location for a CSV full of mailbox names, then it will add full permissions for the user to all the listed mailboxes
-# and then remove the permissions, this should fix the problem with mailboxes still mapping after a user's permissions have been removed.
+<#
+Author: Eric Sobkowicz
+Created: November 21, 2016
+Last Updated By: Eric Sobkowicz
+Last Updated: January 3, 2018
+
+Purpose: 
+    Fixes automapping still mapping a mailbox for a user after they have had their permissions removed via the GUI.
+    Takes a user and list of mailboxes, adds the user with full access permissions to all listed mailboxes, then removes full access permissions.
+
+Requirements: 
+    User has no permissions on the listed mailboxes, there is a csv file with all required mailboxes listed.
+
+Variables:
+    N/A
+#>
 
 # Connect to O365, prompts the user for the O365 credentials to connect with.
 $UserCredential = Get-Credential

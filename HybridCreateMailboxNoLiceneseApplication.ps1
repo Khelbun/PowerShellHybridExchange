@@ -140,7 +140,7 @@ While ($MoveRequestStatistics.PercentComplete -ne 100)
     If ($i%60 -eq 0)
         {
         Write-Host "The current status of the migration is:"
-        Get-MoveRequest $Alias | Get-MoveRequestStatistics | ft DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
+        Get-MoveRequest $Alias | Get-MoveRequestStatistics | Format-Table DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
         $Answer = Read-Host "Would you like to wait another 5min for the Migration to complete? (Y/N)"
         If ($Answer -eq "N")
             {
@@ -151,7 +151,7 @@ While ($MoveRequestStatistics.PercentComplete -ne 100)
     }
 # Output the final status of the migration once it completes, delete the migration batch, close the connection to O365, and return from the function.
 Write-Host "The migration has completed, here is the final status of the migration:" -ForegroundColor Green
-Get-MoveRequest $Alias | Get-MoveRequestStatistics | ft DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
+Get-MoveRequest $Alias | Get-MoveRequestStatistics | Format-Table DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
 Get-MoveRequest -Identity $Alias | Remove-MoveRequest -Confirm:$false | Out-Null
 
 Remove-PSSession $Session
