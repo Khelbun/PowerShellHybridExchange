@@ -46,9 +46,25 @@ Write-Host "
 
 "
 
-# Prompts user for credentials
-$Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
-$LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
+# Checks to see if the local and O365 creds are the same, prompts user for credentials.
+$A = "a"
+while (($A -ne "Y") -and ($A -ne "N")) {
+$A = Read-Host "Are the local credentials and the O365 credentials different?(Y/N)"
+If ($A -eq "Y")
+    {
+    $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
+    $LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
+    }
+elseif ($A -eq "N")
+    {
+    $Cred = Get-Credential -Message "Please enter the admin credentials (username@domain)"
+    $LocalCred = $Cred
+    }
+else
+    {
+    Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Red
+    }
+}
 
 # Asks the admin for the account name and checks to see if it exists, if it does not the script writes an error message and ends.
 $Alias = Read-Host "Please enter the account name"
