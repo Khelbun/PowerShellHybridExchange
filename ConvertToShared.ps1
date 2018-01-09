@@ -158,7 +158,7 @@ If ($RecipientType -eq "UserMailbox")
         Write-Host "Converting mailbox to user mailbox" -ForegroundColor Magenta
         try
             {
-            Set-Mailbox -Identity $Alias -Type User | Out-Null
+            Set-Mailbox -Identity $Alias -Type Regular | Out-Null
             }
         catch
             {
@@ -304,7 +304,7 @@ elseif ($RecipientType -eq "MailUser")
          Write-Host "Converting mailbox to user mailbox" -ForegroundColor Magenta
          try
              {
-             Set-Mailbox -Identity $Alias -Type User | Out-Null
+             Set-Mailbox -Identity $Alias -Type Regular | Out-Null
              }
          catch
              {
