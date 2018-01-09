@@ -195,7 +195,7 @@ If ($RecipientType -eq "UserMailbox")
 # Mailbox is on prem.
 elseif ($RecipientType -eq "MailUser")
     {
-    Write-Host "The mailbox is already on pem, checking for existing migrations." -ForegroundColor Magenta
+    Write-Host "The mailbox is already on prem, checking for existing migrations." -ForegroundColor Magenta
     
     # Check for any existing migrations for the mailbox and output to the user if there are.
     Check-MigrationStatus
@@ -213,19 +213,19 @@ elseif ($RecipientType -eq "MailUser")
     # Mailbox is a user mailbox on prem, output to user and request permission to continue, find out which direction the conversion is going and finish it.
     if ($RecipientTypeDetails -eq "UserMailbox")
         {
-        Write-Host "The mailbox is currently a User Mailbox on prem." -ForegroundColor Magenta
+        Write-Host "The mailbox is currently a user mailbox located on prem." -ForegroundColor Magenta
         }
     
     # Mailbox is a shared mailbox on prem, output to user and request permission to continue, find out which direction the conversion is going and finish it.
     elseif ($RecipientTypeDetails -eq "SharedMailbox")
         {
-        Write-Host "The mailbox is currently a Shared Mailbox on prem." -ForegroundColor Magenta
+        Write-Host "The mailbox is currently a shared mailbox located on prem." -ForegroundColor Magenta
         }
     
     # Mailbox is of a type unsupported by the script, exits the script after throwing an error.
     else 
         {
-        Write-Host "The Mailbox is the unsupported type: $RecipientTypeDetails Exiting script." -ForegroundColor Red
+        Write-Host "The mailbox is the unsupported type: $RecipientTypeDetails Exiting script." -ForegroundColor Red
         Remove-PSSession $Session | Out-Null
         Exit
         }
