@@ -363,7 +363,7 @@ Variables:
 function Check-MigrationStatus 
 {
 $MigrationTest = $null
-$MigrationTest = Get-MoveRequest $Alias | Out-Null
+$MigrationTest = Get-MoveRequest $Alias -ErrorAction SilentlyContinue
 if ([string]::IsNullOrEmpty($MigrationTest))
     {
     $Answer = "a"
