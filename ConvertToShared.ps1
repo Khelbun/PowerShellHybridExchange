@@ -2,7 +2,7 @@
 Author: Eric Sobkowicz
 Created: December 21, 2017
 Last Updated By: Eric Sobkowicz
-Last Updated: December 27, 2017
+Last Updated: January 9, 2018
 
 Purpose: 
     To properly convert a given user mailbox to a shared mailbox by migrating it to the on prem exchange server, converting it, then migrating it back to O365
