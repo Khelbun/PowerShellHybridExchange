@@ -48,23 +48,24 @@ Write-Host "
 
 # Checks to see if the local and O365 creds are the same, prompts user for credentials.
 $A = "a"
-while (($A -ne "Y") -and ($A -ne "N")) {
-$A = Read-Host "Are the local credentials and the O365 credentials different?(Y/N)"
-If ($A -eq "Y")
+while (($A -ne "Y") -and ($A -ne "N")) 
     {
-    $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
-    $LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
+    $A = Read-Host "Are the local credentials and the O365 credentials different?(Y/N)"
+    If ($A -eq "Y")
+        {
+        $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
+        $LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
+        }
+    elseif ($A -eq "N")
+        {
+        $Cred = Get-Credential -Message "Please enter the admin credentials (username@domain)"
+        $LocalCred = $Cred
+        }
+    else
+        {
+        Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Red
+        }
     }
-elseif ($A -eq "N")
-    {
-    $Cred = Get-Credential -Message "Please enter the admin credentials (username@domain)"
-    $LocalCred = $Cred
-    }
-else
-    {
-    Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Red
-    }
-}
 
 # Asks the admin for the account name and checks to see if it exists, if it does not the script writes an error message and ends.
 $Alias = Read-Host "Please enter the account name"
@@ -79,63 +80,338 @@ catch
 	}
 Write-Host "The user is valid." -ForegroundColor Green
 
-# Connect to O365 and check the current mailbox type, ask user if they want to continue.
+# Connect to O365 and check the current migration status, gives user feedback based on where the migration is, requests permission to continue.
 $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
 Import-PSSession $Session | Out-Null
-While ($Answer -ne "Y")
+
+# Gets the user RecipientType to check if the mailbox is onprem or in O365
+Write-Host "Checking the current type, location, and migration status of the mailbox." -ForegroundColor Magenta
+$RecipientType = (Get-Recipient $Alias).RecipientType
+
+# Mailbox is in O365
+If ($RecipientType -eq "UserMailbox")
     {
-    Write-Host "The current Mailbox Type for the user $Alias is $((Get-Mailbox -Identity $Alias).RecipientTypeDetails)" -ForegroundColor DarkYellow
-    $Answer = Read-Host "Would you like to convert the mailbox to a shared mailbox? (Y/N)"
-    If ($Answer -eq "N")
+    # Gets the mailbox RecipientTypeDetails to check if the mailbox is a User or Shared mailbox
+    $RecipientTypeDetails = (Get-Mailbox $Alias).RecipientTypeDetails
+    
+    # Mailbox is a user mailbox in O365, output to user and request permission to continue, if they accept perform the conversion to a shared mailbox.
+    if ($RecipientTypeDetails -eq "UserMailbox")
         {
-        Write-Host "You have entered N, exiting script, no changes have been made." -ForegroundColor Red
+        Write-Host "The mailbox is currently a User Mailbox in O365, it will be converted to a Shared Mailbox." -ForegroundColor Magenta
+        
+        # Call the Check-Migration Function to Check for any existing migrations for the mailbox and output to the user if there are
+        Check-MigrationStatus
+        Remove-PSSession $Session | Out-Null
+
+        # Call the Migrate-Mailbox function to migrate the mailbox to on prem, deletes the migration batch once done.
+        Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To OnPrem" -EmailDomain $EmailDomain -Database $Database
+        
+        # Creates a PS session to the local exchange server, converts the mailbox to a shared mailbox.
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+        Import-PSSession $Session | Out-Null
+        Write-Host "Converting mailbox to shared mailbox" -ForegroundColor Magenta
+        try
+            {
+            Set-Mailbox -Identity $Alias -Type Shared | Out-Null
+            }
+        catch
+            {
+            Write-Host "Script failed during the mailbox conversion step, exiting script." -ForegroundColor Red
+            Remove-PSSession $Session | Out-Null
+            Exit
+            }
+        Remove-PSSession $Session | Out-Null
+
+        # Waits 5 minutes for AD replication to take place, then kicks off the sync to O365, then waits for 10 Minutes for it to complete and replicate between the pods.
+        Create-ProgressBar -Time 300 -Message "Waiting for AD Replication"
+        Invoke-Command {Start-ADSyncSyncCycle -PolicyType Delta} -computer "$SyncServer.$ADDomain"
+        Create-ProgressBar -Time 600 -Message "Waiting for O365 Replication"
+
+        # Call the Migrate-Mailbox function to migrate the mailbox back to the cloud, deletes the migration batch once done.
+        Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To O365"
+
+        # Call the Remove-Licenses function to remove all licenses from the mailbox as they are no longer needed.
+        Remove-Licenses -Cred $Cred -UPN "$Alias@$EmailDomain"
+
+        # Connects to O365, verifies the mailbox type and outputs final success message.
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
+        Import-PSSession $Session | Out-Null
+        Write-Host "The script has completed successfully, the mailbox is now type: $((Get-Mailbox -Identity $Alias).RecipientTypeDetails) " -ForegroundColor Green
+        Remove-PSSession $Session | Out-Null
+        }
+    # Mailbox is a shared mailbox in O365, output to user and request permission to continue, if they accept perform the conversion to a user mailbox.
+    elseif ($RecipientTypeDetails -eq "SharedMailbox")
+        {
+        Write-Host "The mailbox is currently a Shared Mailbox in O365, it will be converted to a User Mailbox." -ForegroundColor Magenta
+         
+        # Check for any existing migrations for the mailbox and output to the user if there are.
+        Check-MigrationStatus
+        Remove-PSSession $Session | Out-Null
+
+        # Call the Migrate-Mailbox function to migrate the mailbox to on prem, deletes the migration batch once done.
+        Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To OnPrem" -EmailDomain $EmailDomain -Database $Database
+        
+        # Creates a PS session to the local exchange server, converts the mailbox to a user mailbox.
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+        Import-PSSession $Session | Out-Null
+        Write-Host "Converting mailbox to user mailbox" -ForegroundColor Magenta
+        try
+            {
+            Set-Mailbox -Identity $Alias -Type User | Out-Null
+            }
+        catch
+            {
+            Write-Host "Script failed during the mailbox conversion step, exiting script." -ForegroundColor Red
+            Remove-PSSession $Session | Out-Null
+            Exit
+            }
+        Remove-PSSession $Session | Out-Null
+
+        # Waits 5 minutes for AD replication to take place, then kicks off the sync to O365, then waits for 10 Minutes for it to complete and replicate between the pods.
+        Create-ProgressBar -Time 300 -Message "Waiting for AD Replication"
+        Invoke-Command {Start-ADSyncSyncCycle -PolicyType Delta} -computer "$SyncServer.$ADDomain"
+        Create-ProgressBar -Time 600 -Message "Waiting for O365 Replication"
+
+        # Call the Migrate-Mailbox function to migrate the mailbox back to the cloud, deletes the migration batch once done.
+        Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To O365"
+        
+        # Call the Apply-O365License function to apply a license to the mailbox.
+        Apply-O365License -Cred $Cred -UPN "$Alias@$EmailDomain"
+
+        # Connects to O365, verifies the mailbox type and outputs final success message.
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
+        Import-PSSession $Session | Out-Null
+        Write-Host "The script has completed successfully, the mailbox is now type: $((Get-Mailbox -Identity $Alias).RecipientTypeDetails) " -ForegroundColor Green
+        Remove-PSSession $Session | Out-Null
+        }
+    
+    # Mailbox is of a type unsupported by the script, exits the script after throwing an error.
+    else 
+        {
+        Write-Host "The Mailbox is the unsupported type: $RecipientTypeDetails Exiting script." -ForegroundColor Red
+        Exit
+        }
+    }
+# Mailbox is on prem.
+elseif ($RecipientType -eq "MailUser")
+    {
+    Write-Host "The mailbox is already on pem, checking for existing migrations." -ForegroundColor Magenta
+    
+    # Check for any existing migrations for the mailbox and output to the user if there are.
+    Check-MigrationStatus
+    Remove-PSSession $Session | Out-Null
+     
+    # End the connection to O365 and open up a connection to the local Exchange server.
+    Remove-PSSession $Session | Out-Null
+    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+    Import-PSSession $Session | Out-Null
+        
+    # Gets the mailbox RecipientTypeDetails to check if the mailbox is a User or Shared mailbox.
+    $RecipientTypeDetails = (Get-Mailbox $Alias).RecipientTypeDetails
+    Remove-PSSession $Session | Out-Null
+    
+    # Mailbox is a user mailbox on prem, output to user and request permission to continue, find out which direction the conversion is going and finish it.
+    if ($RecipientTypeDetails -eq "UserMailbox")
+        {
+        Write-Host "The mailbox is currently a User Mailbox on prem." -ForegroundColor Magenta
+        }
+    
+    # Mailbox is a shared mailbox on prem, output to user and request permission to continue, find out which direction the conversion is going and finish it.
+    elseif ($RecipientTypeDetails -eq "SharedMailbox")
+        {
+        Write-Host "The mailbox is currently a Shared Mailbox on prem." -ForegroundColor Magenta
+        }
+    
+    # Mailbox is of a type unsupported by the script, exits the script after throwing an error.
+    else 
+        {
+        Write-Host "The Mailbox is the unsupported type: $RecipientTypeDetails Exiting script." -ForegroundColor Red
         Remove-PSSession $Session | Out-Null
         Exit
         }
-    If ($Answer -ne "Y")
+
+    # Find out from the user if this is an interrupted conversion from a user to a shared mailbox, or from a shared to a user mailbox.
+    $B = "a"
+    $ConversionDirection = ""
+    while (($B -ne "Y") -and ($B -ne "N"))
         {
-        Write-Host "You have entered an invalid selection." -ForegroundColor Yellow
+        $B = Read-Host "Is this an interrupted conversion of a user mailbox to a shared mailbox? (Y/N)"
+        if ($B -eq "Y")
+            {
+            Write-Host "Continuing conversion of user mailbox to shared mailbox" -ForegroundColor Magenta
+            $ConversionDirection = "ToShared"
+            }
+        elseif ($B -eq "N")
+            {
+            $C = "a"
+            while (($C -ne "Y") -and ($C -ne "N"))
+                {
+                $C = Read-Host "Is this an interrupted conversion of a shared mailbox to a user mailbox? (Y/N)"
+                if ($C -eq "Y")
+                    {
+                    Write-Host "Continuing conversion of shared mailbox to user mailbox" -ForegroundColor Magenta
+                    $ConversionDirection = "ToUser"
+                    }
+                elseif ($C -eq "N")
+                    {
+                    Write-Host "This is an unsupported scenario, exiting script" -ForegroundColor Red
+                    Exit
+                    }
+                else
+                    {
+                    Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Red
+                    }
+                }
+            }
+        else
+            {
+            Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Red
+            }
         }
-    }
-Remove-PSSession $Session | Out-Null
+    
+    # Finish Conversion to shared mailbox if needed.
+    if (($ConversionDirection -eq "ToShared") -and ($RecipientTypeDetails -eq "UserMailbox"))
+        {
+        # Creates a PS session to the local exchange server, converts the mailbox to a shared mailbox.
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+        Import-PSSession $Session | Out-Null
+        Write-Host "Converting mailbox to shared mailbox" -ForegroundColor Magenta
+        try
+            {
+            Set-Mailbox -Identity $Alias -Type Shared | Out-Null
+            }
+        catch
+            {
+            Write-Host "Script failed during the mailbox conversion step, exiting script." -ForegroundColor Red
+            Remove-PSSession $Session | Out-Null
+            Exit
+            }
+        Remove-PSSession $Session | Out-Null
 
-# Call the Migrate-Mailbox function to migrate the mailbox to on prem, deletes the migration batch once done.
-Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To OnPrem" -EmailDomain $EmailDomain -Database $Database
+        # Waits 5 minutes for AD replication to take place, then kicks off the sync to O365, then waits for 10 Minutes for it to complete and replicate between the pods.
+        Create-ProgressBar -Time 300 -Message "Waiting for AD Replication"
+        Invoke-Command {Start-ADSyncSyncCycle -PolicyType Delta} -computer "$SyncServer.$ADDomain"
+        Create-ProgressBar -Time 600 -Message "Waiting for O365 Replication"
+        }
 
-# Creates a PS session to the local exchange server, converts the mailbox to a shared mailbox.
-$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
-Import-PSSession $Session | Out-Null
-Write-Host "Converting mailbox to shared mailbox"
-try
-    {
-    Set-Mailbox -Identity $Alias -Type Shared | Out-Null
-    }
-catch
-    {
-    Write-Host "Failed to convert mailbox to shared, exiting script." -ForegroundColor Red
+    # Finish conversion to user mailbox if needed.
+    if (($ConversionDirection -eq "ToUser") -and ($RecipientTypeDetails -eq "SharedMailbox"))
+        {
+         # Creates a PS session to the local exchange server, converts the mailbox to a shared mailbox.
+         $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+         Import-PSSession $Session | Out-Null
+         Write-Host "Converting mailbox to user mailbox" -ForegroundColor Magenta
+         try
+             {
+             Set-Mailbox -Identity $Alias -Type User | Out-Null
+             }
+         catch
+             {
+             Write-Host "Script failed during the mailbox conversion step, exiting script." -ForegroundColor Red
+             Remove-PSSession $Session | Out-Null
+             Exit
+             }
+         Remove-PSSession $Session | Out-Null
+ 
+         # Waits 5 minutes for AD replication to take place, then kicks off the sync to O365, then waits for 10 Minutes for it to complete and replicate between the pods.
+         Create-ProgressBar -Time 300 -Message "Waiting for AD Replication"
+         Invoke-Command {Start-ADSyncSyncCycle -PolicyType Delta} -computer "$SyncServer.$ADDomain"
+         Create-ProgressBar -Time 600 -Message "Waiting for O365 Replication"
+        }
+
+    # Call the Migrate-Mailbox function to migrate the mailbox back to the cloud, deletes the migration batch once done.
+    Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To O365"
+
+    if ($ConversionDirection -eq "ToShared")
+        {
+        # Call the Remove-Licenses function to remove all licenses from the mailbox as they are no longer needed.
+        Remove-Licenses -Cred $Cred -UPN "$Alias@$EmailDomain"
+        }
+    if ($ConversionDirection -eq "ToUser")
+        {
+        # Call the Apply-O365License function to apply a license to the mailbox.
+        Apply-O365License -Cred $Cred -UPN "$Alias@$EmailDomain" 
+        }
+
+    # Connects to O365, verifies the mailbox type and outputs final success message.
+    $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
+    Import-PSSession $Session | Out-Null
+    Write-Host "The script has completed successfully, the mailbox is now type: $((Get-Mailbox -Identity $Alias).RecipientTypeDetails) " -ForegroundColor Green
     Remove-PSSession $Session | Out-Null
-    Exit
     }
-Remove-PSSession $Session | Out-Null
 
-# Waits 5 minutes for AD replication to take place, then kicks off the sync to O365, then waits for 10 Minutes for it to complete and replicate between the pods.
-Create-ProgressBar -Time 300 -Message "Waiting for AD Replication"
-Invoke-Command {Start-ADSyncSyncCycle -PolicyType Delta} -computer "$SyncServer.$ADDomain"
-Create-ProgressBar -Time 600 -Message "Waiting for O365 Replication"
-
-# Call the Migrate-Mailbox function to migrate the mailbox back to the cloud, deletes the migration batch once done.
-Migrate-Mailbox -Cred $Cred -LocalCred $LocalCred -Alias $Alias -MigrationEndpoint $MigrationEndpoint -O365Domain $O365Domain -Direction "To O365"
-
-# Call the Remove-Licenses function to remove all licenses from the mailbox as they are no longer needed.
-Remove-Licenses -Cred $Cred -UPN "$Alias@$EmailDomain"
-
-# Connects to O365, verifies the mailbox type and outputs final success message.
-$Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
-Import-PSSession $Session | Out-Null
-Write-Host "The script has completed successfully, the mailbox is now type: $((Get-Mailbox -Identity $Alias).RecipientTypeDetails) " -ForegroundColor Green
-Remove-PSSession $Session | Out-Null
+# Mailbox is of a type unsupported by the script, exits the script after throwing an error.
+else
+    {
+    Write-Host "The Mailbox is the unsupported type: $RecipientType Exiting script." -ForegroundColor Red
+    Remove-PSSession $Session | Out-Null
+    Exit    
+    }
 }
 
+<#
+Purpose: 
+    This function checks to see if a migration currently exists for the user or not.  It provides a checkpoint for if the user wishes to continue.
+
+Requirements:
+    A connection to an O365 PS session
+
+Variables:
+    N/A
+#>
+function Check-MigrationStatus 
+{
+$MigrationTest = $null
+$MigrationTest = Get-MoveRequest $Alias
+if ([string]::IsNullOrEmpty($MigrationTest))
+    {
+    $Answer = "a"
+    While ($Answer -ne "Y")
+        {
+        $Answer = Read-Host "There are no existing migrations for this user, would you like to continue? (Y/N): "
+        If ($Answer -eq "N")
+            {
+            Write-Host "You have selected not to continue, exiting script, no changes have been made." -ForegroundColor Red
+            Remove-PSSession $Session | Out-Null
+            Exit
+            }
+        If ($Answer -ne "Y")
+            {
+            Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Yellow
+            }
+        }
+    }
+else
+    {
+    if ((Get-MoveRequest $Alias | Get-MoveRequestStatistics).PercentComplete -ne 100)
+        {
+        Write-Host "There is an in progress migration for this user, the current status is as follows: " -ForegroundColor Red
+        Get-MoveRequest $Alias | Get-MoveRequestStatistics | Format-Table DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
+        Write-Host "The script cannot run while there is an ongoing migration, exiting script." -ForegroundColor Red
+        Remove-PSSession $Session | Out-Null
+        Exit
+        }
+    $Answer = "a"
+    While ($Answer -ne "Y")
+        {
+        Write-Host "There is an existing migration batch for this mailbox, here is its current status:" -ForegroundColor Magenta
+        Get-MoveRequest $Alias | Get-MoveRequestStatistics | Format-Table DisplayName, StatusDetail, TotalMailboxSize, TotalArchiveSize, PercentComplete
+        $Answer = Read-Host "Would you like to continue with the conversion, this will delete the existing migration batch? (Y/N): "
+        If ($Answer -eq "N")
+            {
+            Write-Host "You have selected not to continue, exiting script, no changes have been made." -ForegroundColor Red
+            Remove-PSSession $Session | Out-Null
+            Exit
+            }
+        If ($Answer -ne "Y")
+            {
+            Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Yellow
+            }
+        }    
+    Write-Host "Removing the old Migration Batch" -ForegroundColor Magenta
+    Get-MoveRequest -Identity $Alias | Remove-MoveRequest -Confirm:$false | Out-Null
+    }
+}
 <#
 Purpose: 
     This function waits the specified $time in seconds and creates a progress bar that shows the time remaining, percent complete, and message set with $Message
@@ -293,6 +569,67 @@ catch
 # Lets the user know that the removal is finished and ouputs the current licensing status of the mailbox.
 Write-Host "The license removal was successful, here is the current license status of the maibox:" -ForegroundColor Green
 Get-MsolUser -UserPrincipalName $UPN | Format-Table UserPrincipalName, DisplayName, IsLicensed, Licenses
+}
+
+<#
+Purpose: 
+    Take a user UPN, connect to Azure AD, display a list of available licenses and their count, add the license the user chooses to the account.
+
+Requirements: 
+    Azure AD powershell module needs to be installed on the computer running the script.
+
+Variables:
+    $Cred - The O365 admin credentials passed as a credential object.
+    $UPN - The User Principal name of the user to apply the license to.
+#>
+
+Function Apply-O365License ($Cred, $UPN)
+{
+# Import the MSOnline module and connect to Azure AD
+Import-Module MSOnline | Out-Null
+Connect-MsolService -Credential $Cred
+# Get a list of all Possible licenses to apply
+$Licenses = Get-MsolAccountSku | Where-Object {$_.ActiveUnits -ne 0 -and $_.ActiveUnits -lt 1000}
+
+# Create a menu object and populate it with the MenuNumber, AccountSkuID, and Available License Count
+$Menu = @([psobject])
+$MenuNumber = 1
+foreach ($License in $Licenses)
+    {
+    $MenuItem = New-Object psobject
+    $MenuItem | Add-Member -Type NoteProperty -Name MenuNumber -Value $MenuNumber
+    $MenuItem | Add-Member -Type NoteProperty -Name AccountSkuID -Value $License.AccountSkuID
+    $MenuItem | Add-Member -Type NoteProperty -Name AvailableLicenses -Value ($License.ActiveUnits - $License.ConsumedUnits)
+    $Menu += $MenuItem
+    $MenuNumber ++
+    }
+
+# Display Menu for the user and ask which license they would like to apply, exit function if they enter N.
+Write-Host "The current licensing applied to the selected user is as follows:" -ForegroundColor Magenta
+Get-MsolUser -UserPrincipalName $UPN | Format-Table DisplayName, Licenses
+Write-Host "Here are the available license(s):" -ForegroundColor Magenta
+$Menu | Format-Table MenuNumber, AccountSkuID, AvailableLicenses
+$Choice = Read-Host "Please enter the MenuNumber of the license you would like to apply, this will overwrite any existing licenses. Enter N to exit without making changes."
+if ($Choice -eq "N")
+    {
+    Write-Host "Exiting license application, no changes have been made." -ForegroundColor Red
+    Exit
+    }
+$SelectedLicense = $Menu | Where-Object {$_.MenuNumber -eq $Choice}
+Write-Host "Applying $($SelectedLicense.AccountSkuID) to user $UPN." -ForegroundColor Magenta
+
+try
+	{
+	Set-MsolUser -UserPrincipalName $UPN -UsageLocation "CA"
+	Set-MsolUserLicense -UserPrincipalName $UPN -AddLicenses $SelectedLicense.AccountSkuID
+	}
+catch
+	{
+	Write-Host "An error occured during the application of the license." -ForegroundColor Red
+	Exit
+	}
+Write-Host "The license $($SelectedLicense.AccountSkuID) has been applied succesfully to the user $UPN. Here is the new license status of the user:" -ForegroundColor Green
+Get-MsolUser -UserPrincipalName $UPN | Format-Table DisplayName, Licenses
 }
 
 # Runs the Main function
