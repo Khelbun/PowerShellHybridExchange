@@ -381,6 +381,7 @@ if ([string]::IsNullOrEmpty($MigrationTest))
             Write-Host "You have entered an invalid selection, please enter Y for Yes or N for No" -ForegroundColor Yellow
             }
         }
+    Write-Host " "
     }
 else
     {
