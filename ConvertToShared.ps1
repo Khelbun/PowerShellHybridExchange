@@ -9,6 +9,7 @@ Purpose:
 
 Requirements: 
     Hybrid Exchange environment, RSAT tools installed on the system running the script.
+    MSOL module installed for connecting to azure AD.
     All computer names should be the short name, not the FQDN, if the FQDN is needed they will be combined in the script with the domain name in the $ADDomain variable.
 
 Variables:
