@@ -2,7 +2,7 @@
 Author: Eric Sobkowicz
 Created: December 20, 2017
 Last Updated By: Eric Sobkowicz
-Last Updated: December 27, 2017
+Last Updated: January 3, 2018
 
 Purpose: 
     This script creates a mailbox on a local exchange server for an existing AD user, syncs the changes to O365, migrates the mailbox to O365, and applies the specified O365 license.
