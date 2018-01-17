@@ -260,7 +260,7 @@ function Check-Credentials {
 # Check the O365 credentials to make sure they are valid. If they are not valid outputs an error message and has the user re-enter them then checks them again.
 $Continue = "N"
 While ($Continue -eq "N")
-{
+    {
     try 
         {
         Write-Host "Checking the O365 credentials." -ForegroundColor Magenta
@@ -277,7 +277,7 @@ While ($Continue -eq "N")
         $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
         $Continue = "N"
         }
-}
+    }
 # Check the local credentials to make sure they are valid.  If they are not valid outputs an error message and has the user re-enter them then checks them again.
 $Continue = "N"
 While ($Continue -eq "N")
