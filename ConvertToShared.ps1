@@ -68,6 +68,9 @@ while (($A -ne "Y") -and ($A -ne "N"))
         }
     }
 
+# Call the Check-Credentials function to verify the credentials are o.k. before continuing.
+Check-Credentials
+
 # Asks the admin for the account name and checks to see if it exists, if it does not the script writes an error message and ends.
 $Alias = Read-Host "Please enter the account name"
 try
@@ -634,6 +637,63 @@ Write-Host "The license $($SelectedLicense.AccountSkuID) has been applied succes
 Get-MsolUser -UserPrincipalName $UPN | Format-Table DisplayName, Licenses
 }
 
+<#
+Purpose: 
+    Checks the entered credentials and makes sure they are valid before continuing.
+
+Requirements: 
+    O365 Powershell installed on the system running the script.
+    $Cred and $LocalCred in use as the credential objects.
+
+Variables:
+    N/A
+
+#>
+function Check-Credentials {
+# Check the O365 credentials to make sure they are valid. If they are not valid outputs an error message and has the user re-enter them then checks them again.
+$Continue = "N"
+While ($Continue -eq "N")
+{
+    try 
+        {
+        Write-Host "Checking the O365 credentials." -ForegroundColor Magenta
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri https://outlook.office365.com/powershell-liveid/ -Credential $Cred -Authentication Basic -AllowRedirection
+        Import-PSSession $Session | Out-Null
+        Remove-PSSession $Session | Out-Null
+        $Continue = "Y"
+        Write-Host "Successfully connected to O365 with the given credentials." -ForegroundColor Green
+        }
+    catch 
+        {
+        Write-Host "There is an issue with the O365 credentials that were entered please check the password and ensure you are using the full domain (user@domain) in the username" -ForegroundColor Red
+        Remove-PSSession $Session | Out-Null
+        $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
+        $Continue = "N"
+        }
+}
+# Check the local credentials to make sure they are valid.  If they are not valid outputs an error message and has the user re-enter them then checks them again.
+$Continue = "N"
+While ($Continue -eq "N")
+    {
+    try
+        {
+        Write-Host "Checking the local credentials." -ForegroundColor Magenta
+        $Session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "http://$ExchangeServer.$ADDomain/PowerShell/" -Authentication Kerberos -Credential $LocalCred
+        Import-PSSession $Session | Out-Null
+        Remove-PSSession $Session | Out-Null
+        $Continue = "Y"
+        Write-Host "Succesfully connected to the local exchange server with the given credentials." -ForegroundColor Green
+        }
+    catch 
+        {
+        Write-Host "There is an issue with the local credentials that were entered please check that you entered the username and password correctly." -ForegroundColor Red
+        Remove-PSSession $Session | Out-Null
+        $LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
+        $Continue = "N"
+        }
+    }
+}
+   
 # Runs the Main function
 # Putting the main code within a function and calling it at the end of the script allows for the main code to be at the top of the script and all other functions below it
 Main
