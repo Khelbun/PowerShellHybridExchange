@@ -208,7 +208,6 @@ While ($Continue -eq "N")
     catch 
         {
         Write-Host "There is an issue with the O365 credentials that were entered please check the password and ensure you are using the full domain (user@domain) in the username" -ForegroundColor Red
-        Remove-PSSession $Session | Out-Null
         $Cred = Get-Credential -Message "Please enter the Office 365 credentials (username@domain)"
         $Continue = "N"
         }
@@ -229,7 +228,6 @@ While ($Continue -eq "N")
     catch 
         {
         Write-Host "There is an issue with the local credentials that were entered please check that you entered the username and password correctly." -ForegroundColor Red
-        Remove-PSSession $Session | Out-Null
         $LocalCred = Get-Credential -Message "Please enter the Domain Admin credentials (username@domain)"
         $Continue = "N"
         }
